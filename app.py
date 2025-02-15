@@ -68,5 +68,5 @@ def update_weather(n_clicks, city):
     return figure
 
 # アプリを起動
-if __name__ == '__main__':
-    app.run_server(debug=True)
+if __name__ == "__main__":
+    app.run_server(host='0.0.0.0', port=8080, debug=True)
