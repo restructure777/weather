@@ -4,6 +4,7 @@ from dash.dependencies import Input, Output, State
 import plotly.graph_objs as go
 import requests
 import os
+import datetime
 
 app = dash.Dash(__name__)
 server = app.server  # Herokuデプロイ用
@@ -17,7 +18,7 @@ CITY_COORDS = {
 }
 
 app.layout = html.Div([
-    html.H1("🌤 OpenWeather 5日予報ダッシュボード"),
+    html.H1("🌤 過去180日 & 未来5日の天気ダッシュボード"),
     dcc.Dropdown(
         id="city-dropdown",
         options=[{"label": city, "value": city} for city in CITY_COORDS.keys()],
@@ -42,6 +43,29 @@ def update_weather(n_clicks, city):
         return go.Figure(), "環境変数 WEATHER_API_KEY が未設定です。Renderに設定してください。"
 
     lat, lon = CITY_COORDS[city]
+    today = datetime.date.today()
+    past_start_date = (today - datetime.timedelta(days=180)).strftime("%Y-%m-%d")
+    past_end_date = today.strftime("%Y-%m-%d")
+    past_url = (
+        f"https://archive-api.open-meteo.com/v1/archive?latitude={lat}&longitude={lon}"
+        f"&start_date={past_start_date}&end_date={past_end_date}"
+        f"&daily=temperature_2m_max,temperature_2m_min&timezone=Asia/Tokyo"
+    )
+
+    try:
+        past_response = requests.get(past_url, timeout=20)
+        past_response.raise_for_status()
+        past_data = past_response.json()
+    except requests.RequestException:
+        return go.Figure(), "Open-Meteoから過去データを取得できませんでした。"
+
+    try:
+        past_dates = past_data["daily"]["time"]
+        past_temps_min = past_data["daily"]["temperature_2m_min"]
+        past_temps_max = past_data["daily"]["temperature_2m_max"]
+    except (KeyError, TypeError):
+        return go.Figure(), "過去データの解析に失敗しました。"
+
     forecast_url = (
         f"https://api.openweathermap.org/data/2.5/forecast?lat={lat}&lon={lon}"
         f"&appid={api_key}&units=metric&lang=ja"
@@ -76,15 +100,30 @@ def update_weather(n_clicks, city):
     if not daily_temps:
         return go.Figure(), "予報データの解析に失敗しました。"
 
-    all_dates = sorted(daily_temps.keys())
-    all_temps_min = [daily_temps[d]["min"] for d in all_dates]
-    all_temps_max = [daily_temps[d]["max"] for d in all_dates]
+    future_start = today + datetime.timedelta(days=1)
+    future_end = today + datetime.timedelta(days=5)
+    future_dates = []
+    future_temps_min = []
+    future_temps_max = []
+    for date_str in sorted(daily_temps.keys()):
+        date_obj = datetime.date.fromisoformat(date_str)
+        if future_start <= date_obj <= future_end:
+            future_dates.append(date_str)
+            future_temps_min.append(daily_temps[date_str]["min"])
+            future_temps_max.append(daily_temps[date_str]["max"])
+
+    if not future_dates:
+        return go.Figure(), "未来5日分の予報データを取得できませんでした。"
+
+    all_dates = past_dates + future_dates
+    all_temps_min = past_temps_min + future_temps_min
+    all_temps_max = past_temps_max + future_temps_max
     figure = {
         "data": [
             go.Scatter(x=all_dates, y=all_temps_min, mode="lines+markers", name="最低気温"),
             go.Scatter(x=all_dates, y=all_temps_max, mode="lines+markers", name="最高気温")
         ],
-        "layout": go.Layout(title=f"{city} の今後5日間の気温予報（OpenWeather）", xaxis={"title": "日付", "tickangle": -45}, yaxis={"title": "気温 (℃)"}, hovermode="closest")
+        "layout": go.Layout(title=f"{city} の過去180日間と未来5日間の気温推移", xaxis={"title": "日付", "tickangle": -45}, yaxis={"title": "気温 (℃)"}, hovermode="closest")
     }
     return figure, ""
 
